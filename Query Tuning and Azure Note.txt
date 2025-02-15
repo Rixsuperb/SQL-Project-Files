@@ -1,0 +1,974 @@
+
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+----------------------------------AUDIT--------------------
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 
+HOW TO AUDIT LONG RUNNING QUERIES ?
+	-- METHOD 1: USING ACTIVITY MONITOR (AM) TOOL. THIS TOOL IS AUTO INSTALLED WITH SQL SERVER MANAGEMENT STUDIO.
+	-- METHOD 2: USING "PROCEDURE CACHE"- A MEMORY LOCATION TO STORE QUERY EXECUTION PLANS. 
+
+
+----------------ACTIVITY MONITOR-------------------
+
+-- METHOD 1:	USING ACTIVITY MONITOR (AM) TOOL
+	LAUNCH SSMS > CONNECT TO SQL SERVER > RIGHT CLICK SERVER > ACTIVITY MONITOR
+	THEN WE SEE THE METRICS or COUNTERS FOR :
+		1. PROCESSOR USAGE	
+		2. WAITING TASKS
+		3. DATABASE I/O
+		4. BATCH REQUESTS / SECOND
+		5. RECENT EXPENSIVE QUERIES
+:SUCH QUERIES THAT WERE COMPLETED RECENTLY. USED MORE QUERY RESOURCES.
+		6. ACTIVE EXPENSIVE QUERIES	
+: SUCH QUERIES THAT WERE STILL RUNNING. USING MORE QUERY RESOURCES.
+
+
+We are auditing and monitoring whatever operation being performed.
+
+
+RUN THIS BELOW TEST QUERY:
+SELECT * INTO TESTABLE1 FROM SYSMESSAGES   -- NEW TABLE "TEST" IS CREATED
+
+
+--------------PROCEDURE CACHE -----------------
+
+- METHOD 2: USING PROCEDURE CACHE 
+
+SELECT * FROM SYS.DM_EXEC_QUERY_STATS		
+
+
+DYNAMIC MANAGEMENT VIEW(DMV)  Report list of ALL QUERIES THAT RUN IN THE SERVER SINCE IT STARTED
+
+-- THIS DMV WILL REPORT ALL QUERIES THAT RUN IN THE SERVER SINCE IT STARTED
+
+This DMV will report all query based on it's handle.
+Every query stats has a handle.
+SELECT TOP 10 * FROM SYS.DM_EXEC_QUERY_STATS	
+
+SELECT TOP 10 * FROM SYS.DM_EXEC_QUERY_STATS	ORDER BY  total_worker_time / execution_count desc
+
+SELECT TOP 10 plan_handle,  total_worker_time / execution_count AS AVG_EXEC_TIME  FROM SYS.DM_EXEC_QUERY_STATS	ORDER BY  AVG_EXEC_TIME DESC
+
+
+-- FROM ABOVE, ACTUAL QUERY (TEXT) IS MISSING. 
+
+Hoe to extract one or given handle.
+
+Select * from SYS_DM_EXEC_SQL_TEXT()
+
+-- GIVEN A PIRTICULAR PLAN HANDLE, HOW TO REPORT / EXTRACT THE ACTUAL QUERY?
+-- FOR THIS, WE NEED TO USE ONE DMF : DYNAMIC MANAGEMENT FUNCTION
+
+SELECT * FROM SYS.DM_EXEC_SQL_TEXT(0x06000100B1562124503C5671F501000001000000000000000000000000000000000000000000000000000000)
+
+-- COMBINING TABLES OR VIEWS WITH FUNCTION : WE NEED TO USE CROSS APPLY
+-- HOW TO REPORT TOP 10 LONG RUNNING QUERIES ?
+
+SELECT TOP 10 plan_handle,  total_worker_time / execution_count AS AVG_EXEC_TIME  FROM SYS.DM_EXEC_QUERY_STATS	
+CROSS APPLY sys.DM_EXEC_SQL_TEXT(plan_handle)
+ORDER BY  AVG_EXEC_TIME DESC
+ 
+
+-- HOW TO STORE ABOVE QUERY IN THE VIEW?
+
+CREATE VIEW VW_QUERYSTORE
+AS
+SELECT TOP 10 plan_handle,  total_worker_time / execution_count AS AVG_EXEC_TIME  FROM SYS.DM_EXEC_QUERY_STATS	
+CROSS APPLY sys.DM_EXEC_SQL_TEXT(plan_handle)
+ORDER BY  AVG_EXEC_TIME DESC
+
+
+SELECT TOP 10 plan_handle,  total_worker_time / execution_count AS AVG_EXEC_TIME, text  FROM SYS.DM_EXEC_QUERY_STATS	
+CROSS APPLY sys.DM_EXEC_SQL_TEXT(plan_handle)
+ORDER BY  AVG_EXEC_TIME DESC
+ 
+
+plan handle is function
+Text is from the function
+
+note- no user interface, we go by query.from there we get all the statistics
+
+we store the query in VIEW
+
+
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+----------------ADVANCE INDEXES-------------------------------------------------------------------------
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+To verify is a table has index or not
+
+CREATE TABLE STUDENTS
+(
+STD_ID INT, 
+STD_NAME VARCHAR(30), 
+STD_AGE FLOAT, 
+STD_COURSE VARCHAR(30)
+)
+
+INSERT STUDENTS VALUES	(1001, 'AMIN', 23.5,'COMPUTERS'),  (1002, 'SAM', 23.5,'CIVIL'), 
+				 (1003, 'AMINI', 23.5,'CIVIL'),  (1004, 'JOHN', 23.5,'COMPUTERS'), 
+				 (1005, 'JEFF', 23.5,'COMPUTERS')
+
+SELECT * FROM   STUDENTS	
+
+we use:
+ SP_HELPINDEX 'STUDENT'
+
+Earlier class we learnt Basic Index ( clustered and non clustered)
+
+Now we learn advance indexes:
+Note when you created a primary key, it means clustered index is created.we can ony have one clustered index in a table.
+
+CREATE CLUSTERED INDEX INDX1  ON STUDENTS (STD_ID ASC) 
+WITH 
+(
+SORT_IN_TEMPDB = ON,
+fillfactor = 80,			
+pad_index = on,				
+online  = on				
+)
+
+
+
+fillfactor = 80,-- means, each index page is 80% full. remaining 20% is left empty for future updates.
+pad_index = on,	-- means, above Fill Factor is applied to Data Pages. 
+online  = on-- means, ONLINE INDEX. Index remains online during its creation. 
+SORT_IN_TEMPDB = ON, -- Default sort area is Memory,so we can use tempDB
+
+-- HOW TO VERIFY THE INDEX USAGE?	  		 
+-- Right click anywhere in the session window > include LIVE QUERY STATISTICS. THEN EXECUTE BELOW QUERY:
+SELECT * FROM   STUDENTS	-- INDEX SCAN
+
+-- INDX1 IS IN USE.  INDEX SCAN : COMPLETE INDEXED COLUMN IS ACCESSED / READ
+
+Note: currently STD_COURSE  column is using STD_ID index,
+there is no index for STD_COURSE  and we want to search for this column, so we DEFINE INDEX ON THAT COLUMN:
+
+-- YOU WANTED TO SEARCH FOR STD_COURSE COLUMN. THEN DEFINE INDEX ON THAT COLUMN:
+
+
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+--------------NONCLUSTERED INDEXES AND PARTITIONS, COMPRESSION------------------------------------------------------------------------
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+-- YOU WANTED TO SEARCH FOR STD_COURSE COLUMN. THEN DEFINE INDEX ON THAT COLUMN:
+
+CREATE NONCLUSTERED INDEX INDX2  ON STUDENTS (STD_COURSE)
+
+SELECT * FROM   STUDENTS WHERE STD_COURSE =   'COMPUTERS'	-- CLUSTERED INDEX IS IN USE !!
+
+
+SELECT STD_COURSE FROM   STUDENTS WHERE STD_COURSE =   'COMPUTERS'	-- NON CLUSTERED INDEX IS IN USE !!
+
+
+
+-------------INCLUDED INDEX---------
+
+-- INCLUDED INDEX : Such indexes that include additional columns that are used in the query.
+
+Example-
+CREATE NONCLUSTERED INDEX INDXV2 ON STUDENTS (STD_COURSE) INCLUDE (STD_ID, STD_NAME, STD_AGE)
+
+so query optimizer can give more priority to this index above.
+
+SELECT STD_ID, STD_NAME, STD_COURSE, STD_AGE FROM   STUDENTS WHERE STD_COURSE = 'COMPUTERS'	 -- INDX3 IS IN USE. INDEX SEEK.
+
+When you create Included Index, Query optimizer gives priority for that index.
+
+-------------COLUMNSTORE INDEX:---------
+
+-- COLUMNSTORE NON CLUSTERED INDEX: -- ONLY UNIQUE VALUES OF THE COLUMN ARE INDEXED. TO SAVE SPACE. DWH	
+
+Example-
+CREATE NONCLUSTERED COLUMNSTORE INDEX INDX4 ON STUDENTS (STD_NAME) 
+
+
+SELECT STD_NAME FROM STUDENTS	GROUP BY STD_NAME  
+
+Group By gives you unique value
+Internal this index can be used.
+Columnstore also gives unique values.
+So, whenever we frequently  use group by on a column, it define columnstore index on a column
+
+-------------FILTERED INDEX :---------
+
+-- FILTERED INDEX : This Index will be created on few specific rows of the table.
+APPLICABLE FOR BOTH CLUSTERED AS WELL AS NONCLUSTERED INDEXES. EX: TO INDEX ACTIVE PRODUCTS .
+
+Example-
+CREATE NONCLUSTERED INDEX INDX5 ON STUDENTS (STD_COURSE) WHERE STD_COURSE = 'COMPUTERS'
+
+
+SELECT * FROM STUDENTS	WHERE STD_COURSE = 'COMPUTERS'
+
+Frequently uses of column in a query condition needs filter index.
+
+
+-------------ONLINE INDEX:---------
+
+--ONLINE INDEX: It means THE ALREADY CREATED PART OF INDEX IS READILY USED BY THE QUERIES Remaining Index is still been created. CLUSTERED & NON CLUSTERED.  8 MIN > 80% INDEX 
+
+Example-
+
+CREATE NONCLUSTERED INDEX INDX6 ON STUDENTS (STD_NAME) WITH (ONLINE  = ON)
+
+The already created part of index is used by the query, the rwmaing index is been created
+
+
+-------------COVERING INDEX:---------
+
+--COVERING INDEX: SUCH INDEX THAT CONTAINS ALL COLUMNS USED IN A GIVEN QUERY.
+
+SELECT STD_ID, STD_NAME, STD_COURSE, STD_AGE FROM STUDENTS   WHERE STD_COURSE = 'COMPUTERS'
+		
+-- INDX3 IS THE COVERING INDEX FOR THIS QUERY
+
+
+Here: The index that has all the  4 columns is the covering index (so, INDX3 is the covering index) for this query below:
+
+SELECT STD_ID, STD_NAME, STD_COURSE, STD_AGE FROM STUDENTS   WHERE STD_COURSE = 'COMPUTERS'
+
+-------------------
+Here the INDX 4 is the covering Index:
+
+-- INDX4 IS THE COVERING INDEX FOR THIS QUERY Below:
+		
+SELECT DISTINCT STD_NAME FROM STUDENTS  	
+
+Note- Distinct also give unique value
+
+
+---------------INDEXED VIEW----------------
+
+How can we know on which table, which index need to be created ?
+
+Answer- Use DTA Tool (Database Tuning Adivsor)
+
+
+--INDEXED VIEW  = MATERIALIZED VIEW: such view whose data is stored permanently in the database. Used in reporting scenarios, faster report scenarios and working with bigger volumne of data.
+
+CREATE VIEW VW_STD_DATA
+WITH SCHEMABINDING				 
+AS
+SELECT STD_ID, STD_AGE, STD_COURSE, STD_NAME FROM DBO.STUDENTS 
+
+----------
+
+WITH SCHEMABINDING-- THIS PREVENTS STRUCTURAL CHANGES ON THE BASE TABLE. EX: WE CANNOT RENAME OR REMOVE THE STD_ID COLUMN	 
+
+
+-- TESTING SCHEMABINDING:
+ALTER TABLE STUDENTS DROP COLUMN STD_ID;    --Error
+
+-- HOW TO CONVERT ABOVE VIEW INTO INDEXED VIEW ?
+
+CREATE UNIQUE CLUSTERED INDEX MATINDX ON VW_STD_DATA (STD_ID);	-- QUERY + RESULT ARE STORED IN VIEW
+
+
+Normally view store query
+here , index view store query and result.
+
+/*
+QUESTION	WHAT ARE THE RULES TO DEFINE AN INDEXED VIEW IN MICROSOFT SQL SERVER?
+	RULE 1	:	WE NEED TO DEFINE THE VIEW WITH "SCHEMABINDING" OPTION. THIS IS TO PREVENT STRUCTURAL CHANGES TO THE BASE TABLE.
+	RULE 2	:	WE NEED TO DEFINE UNIQUE CLUSTERED INDEX ON THE VIEW. 
+
+*/
+structural changes or prevented
+we need to include schema nane also, without the schema Binding if we try to create index,it won't work.
+
+we store actual data inside the view, is called Material View that is Physical. index view store query and result.
+
+TOPICS
+CLUSTERED INDEX
+NON CLUSTERED INDEX
+INCLUDED INDEX
+COLUMN STORE
+FILTERED
+ONLINE
+COVERING INDEX
+INDEXED VIEW.
+
+
+  ---WHEN TO USE WHICH INDEX?
+
+USE CLUSTERED INDEX FOR KEY COLUMN SEARCH.   EX: JOINS.
+
+USE INCLUDED NONCLUSTERED INDEX FOR OTHER SEARCH OPERATIONS :  EX: WHERE, HAVING... 
+
+USE FILTERED INDEX FOR WHERE, JOIN, HAVING CONDITIONS:   EX: FEW SPECIFIC ROWS OF THE TABLE. 
+
+USE COLUMNSTORE INDEX:  EX: FOR DISTINCT & GROUP BY QUERIES.
+	
+USE INDEXED VIEW:   EX: FOR FREQUENT RUNNING QUERIES. 
+REPEATABLE READS.  EX: RECURRING REPORTS. 
+--------------------------------------
+
+This is one to easily identify which index to use.
+Sometimes we may not know the exact query that belong to customer. in such case we go for Query Tuning
+
+There is advisor tool that advise us on what index to use. is called DTA TOOL (Database Engine Tuning Advisor)
+
+DTA TOOL require one more ingredient called PARTITION
+
+
+Previously we learnt how to partition a databas (FILEGROUP) Let's see how to partition a Table.
+
+
+PARTITIONS  :	A MECHANISM TO DIVIDE THE TABLE DATA INTO MULTIPLE PARTS. 
+
+Each table is partition and be given to different filegroup.
+
+------STEPS TO IMEPLEMENT PARTITIONS:
+	
+STEP 1:	DEFINE PARTITION FUNCTION- TO SPECIFY THE CONDITION FOR DATA SPLIT
+	
+STEP 2:	DEFINE PARTITION SCHEME	-TO SPECIFY THE LOCATIONS FOR DATA SPLIT
+	
+STEP 3:	PARTITION THE TABLE
+	
+STEP 4: APPLY COMPRESSIONS ON OLD (COLD) INACTIVE PART(S) OF THE TABLE [DWH]
+
+
+--------------------
+
+-- REQUIREMENT: TO DIVIDE THE DATA IN THIS DATABASE BASED ON EMPLOYEE COUNTRY OF RESIDENCE
+
+---------PARTITION FUNCTION----------
+
+-- ITEM #3: DEFINE A PARTITION FUNCTION
+
+CREATE PARTITION FUNCTION partFunction1(varchar(30))
+AS RANGE LEFT			
+FOR VALUES ('CANADA', 'INDIA', 'USA')			
+
+-------------------------------
+-- AS RANGE LEFT: LEFT RANGE (<=)
+FOR VALUES ('CANADA', 'INDIA', 'USA')			-- ALL VALUES SHOULD BE IN ALPHABETICAL ORDER					
+-- BOUNDARY VALUES : 3. SO TOTAL NUMBER OF RANGES : 4
+
+All value up to CANADA range
+CANADA TO INDIA second range
+INDIA TO USA third range
+
+Left means up to, equal to canada
+Right up to or but not equal to  canada
+
+/*
+EXAMPLE:
+FOR VALUES (1, 100)
+					LEFT					RIGHT
+PARTITION 1:		<= 1					< 1
+PARTITION 2:		2 TO 100				1 TO 99
+PARTITION 3:		101 & above				100 & above
+*/
+
+
+-----------PARTITION SCHEMES------------------
+
+-- ITEM #4: DEFINE LOCATIONS FOR ABOVE PARTITION FUNCTIONS = PARTITION SCHEMES
+
+
+CREATE PARTITION SCHEME partScheme			
+AS PARTITION partFunction1 
+TO ('CANADA_FG', 'INDIA_FG', 'USA_FG', 'PRIMARY')
+
+-- WE NEED TOTAL OF 4 LOCATIONS TO STORE ALL 4 RANGES DATA
+Partition Scheme- location means Filegroup.
+
+
+   ----------- PARTITION A NEW TABLE-----------
+
+
+-- ITEM #5: HOW TO PARTITION A NEW TABLE?
+-- HOW TO USE ABOVE PARTITION SCHEME AND PARTITION FUNCTION?
+
+CREATE TABLE Employee_Info
+(
+Emp_ID int,
+Emp_FName varchar(15),
+Emp_LName varchar(12),
+Emp_CNTRY varchar(30)  check (Emp_CNTRY IN ('CANADA', 'INDIA','USA')),
+Emp_Sal int
+) ON partScheme(Emp_CNTRY)
+
+
+Scheme means collection of filegroup
+
+
+-- ITEM #6: HOW TO INSERT DATA INTO ABOVE PARTITIONED TABLE?
+
+insert into Employee_Info values(1001,'Amin',NULL,'USA',190856)
+insert into Employee_Info values(1002,'Amini',NULL,'INDIA',130876)
+insert into Employee_Info values(1003,'Ami',NULL,'CANADA',590876)
+insert into Employee_Info values(1004,'Munish',NULL,'CANADA',490876)
+insert into Employee_Info values(1005,'john',NULL,'INDIA',290876)
+insert into Employee_Info values(1006,'johny',NULL,'INDIA',140876)
+insert into Employee_Info values(1007,'jeff',NULL,'USA',199871)
+
+
+-- ITEM #7: HOW TO VERIFY ABOVE TABLE DATA?
+
+SELECT * FROM Employee_Info
+
+-- NOTE: "PARTITION SCAN"
+
+
+------------------------------------------
+
+-- ITEM #7: HOW TO VERIFY ABOVE TABLE DATA?
+
+SELECT * FROM Employee_Info	-- NOTE: "PARTITION SCAN"
+
+
+-- ITEM #8: HOW TO CHECK IF THE GIVEN TABLE IS PARTITIONED?
+to verify
+SELECT * FROM SYS.PARTITIONS WHERE OBJECT_ID = OBJECT_ID('Employee_Info')
+
+
+  ----PARTITION AN UNPARTITIONED TABLE------------
+
+-- ITEM #9: HOW TO PARTITION AN UNPARTITIONED TABLE?
+CREATE TABLE Employee_InfoV2
+(
+Emp_ID int,
+Emp_FName varchar(15),
+Emp_LName varchar(12),
+Emp_CNTRY varchar(30) check (Emp_CNTRY IN ('CANADA', 'INDIA', 'USA')),
+Emp_Sal int
+)  
+
+
+-- ITEM #10: HOW TO INSERT DATA INTO ABOVE TABLE?
+insert into Employee_InfoV2 values(1001,'Shekar',NULL,'USA',190856), (1002,'Muni',NULL,'INDIA',130876)
+insert into Employee_InfoV2 values(1003,'Muni Shekar',NULL,'CANADA',590876),(1004,'Munish',NULL,'CANADA',490876)
+insert into Employee_InfoV2 values(1005,'john',NULL,'INDIA',290876), (1006,'johny',NULL,'INDIA',140876)
+insert into Employee_InfoV2 values(1007,'jeff',NULL,'USA',199871)
+
+
+-- ITEM #11: HOW TO VERIFY ABOVE TABLE DATA INSERTS?
+SELECT * FROM Employee_InfoV2   
+
+
+-- ITEM #12: HOW TO PARTITION AN UNPARTITIONED TABLE? 
+SELECT * FROM SYS.PARTITIONS WHERE object_id = OBJECT_ID('Employee_InfoV2')				 -- 1
+
+
+-- ITEM #13: HOW TO PARTITION AN UNPARTITIONED TABLE?
+
+CREATE CLUSTERED INDEX IX_CLUSTERED_EMPINFO  ON Employee_InfoV2(Emp_ID) ON partScheme(Emp_CNTRY)
+
+
+-- ITEM #14: HOW TO VERIFY THE ABOVE PARTITIONS?
+SELECT * FROM SYS.PARTITIONS WHERE OBJECT_ID = OBJECT_ID('Employee_InfoV2')				-- 4 PARTITIONS 
+
+
+   -------PARTITION SPLIT-------------------
+
+/* PARTITION MANAGEMENT */
+-- ITEM #14: HOW TO MANAGE or EDIT PARTITIONS?
+-- OPTION 1: PARTITION SPLIT
+-- OPTION 2: PARTITION MERGE
+
+
+-- PARTITION SPLIT  : A MECHANISM TO ADD NEW PARTITIONS TO EXISTING LIST OF VALUES. 
+-- TABLE DATA IS AUTOMATICALLY REARRANGED.
+
+
+ALTER PARTITION SCHEME partScheme   NEXT USED [PRIMARY]									-- ANY OTHER FILEGROUP
+ALTER PARTITION FUNCTION  partFunction1()	SPLIT RANGE ('UK')							-- 4 + 1 RANGES. 5 partition
+
+Split means getting new partition
+Partition for faster search operation.
+
+-- HOW TO TEST ABOVE PARTITIONS?
+
+SELECT * FROM SYS.PARTITIONS WHERE OBJECT_ID = OBJECT_ID('Employee_InfoV2')				-- 5 PARTITIONS
+
+ ----------PARTITION MERGE---------------
+
+-- PARTITION MERGE : A MECHANISM TO REDUCE (COMBINE THE DATA FROM) EXISTING PARTITIONS. 
+-- TABLE DATA AUTOMATICALLY REARRANGED.
+ALTER PARTITION FUNCTION  partFunction1() MERGE RANGE ('USA')		-- CANADA   INDIA     UK					
+
+
+-- ITEM #15: HOW TO VERIFY ABOVE PARTITION MERGE?
+SELECT * FROM SYS.PARTITIONS WHERE OBJECT_ID = OBJECT_ID('Employee_InfoV2')				-- 4 PARTITIONS
+
+
+ ----------DATA ARCHIVAL---------------
+
+-- ITEM # 16: DATA ARCHIVAL : A MECHANISM TO MOVE DATA FROM A SPECIFIC PARTITION OF THE TABLE TO ANOTHER TABLE. CUT & PASTE.
+-- APPLICABLE FOR COLD DATA (INACTIVE DATA FROM AN OLTP TABLE TO DWH): 
+-- REQUIREMENT :	HOW TO ARCHIVE A CANADA DATA ?
+-- STEP 1: CREATE A NEW TABLE WITH THE SAME STRUCTURE AND FILEGROUP AS PER THE SOURCE PARTITION
+
+CREATE TABLE Employee_InfoV2_Canada
+(
+Emp_ID int,
+Emp_FName varchar(15),
+Emp_LName varchar(12),
+Emp_CNTRY varchar(30)  check (Emp_CNTRY IN ('CANADA', 'INDIA', 'USA')),
+Emp_Sal int
+) ON CANADA_FG
+
+
+-- STEP 2: SWITCH THE PARTITION 
+
+ALTER TABLE Employee_Info SWITCH PARTITION 1 TO Employee_InfoV2_Canada; 
+
+
+--- STEP 3: VERIFY THE ARCHIVED TABLE
+SELECT * FROM Employee_InfoV2_Canada
+
+SELECT * FROM Employee_Info
+
+
+NOTE- Archieve means cut data from one able and paste it to another table
+in our example , we create table on Canada partition group
+
+
+ ----------COMPRESSION---------------
+
+COMPRESSION : A MECHANISM TO IDENTIFY UNIQUE VALUES OF THE TABLE AND STORE THE DATA IN SUCH A WAY WE SAVE SPACE.
+
+TYPES OF COMPRESSION:
+*	1. ROW COMPRESSION		:	APPLICABLE FOR COLUMNS WITH SIMILAR DATA.	EX:  GENDER & MARITAL STATUS HAVE SAME VALUE : M
+	2. PAGE COMPRESSION		:	APPLICABLE FOR ROWS WITH SIMILAR DATA.		EX:  SAME PRODUCT SOLD TO SAME CUSTOMER ON SAME DAY MORE THAN ONCE
+*/
+
+-- COMPRESSIONS ARE NOT RECOMMENDED FOR REGULAR, OLTP DATABASE TABLES.
+-- COMPRESSIONS ARE HIGHLY RECOMMENDED FOR DWH : OLD, INACTIVE, ARCHIVED DATA. 
+
+-- ITEM #16: HOW TO COMPRESS THE ENTIRE TABLE?
+
+ALTER TABLE Employee_Info
+REBUILD
+WITH
+(
+DATA_COMPRESSION = ROW
+)
+
+select * from sys.partitions where object_id = object_id('Employee_Info')
+
+
+-- ITEM #17: HOW TO COMPRESS A SPECIFIC PARTITION?
+ALTER TABLE Employee_Info
+REBUILD PARTITION = 1
+WITH 
+(
+DATA_COMPRESSION = PAGE 
+)
+
+-- ITEM #18: HOW TO VERIFY THE ABOVE COMPRESSION?
+select * from sys.partitions where object_id = object_id('Employee_Info')
+
+
+ALTER TABLE Employee_Info
+REBUILD
+WITH
+(
+DATA_COMPRESSION = page
+)
+
+
+
+
+Note - we go for compression but rarely , mostly we go by concept of uncompressed data
+like partition a table
+partition existing table by creating a clustered index on the a existing table
+
+
+
+
+------------------------------------------
+
+---TO CHANGE COLUMN NAME
+EXEC sp_rename 'STUDTEMP.CONSTRANINT', 'STUDCODE', 'COLUMN'
+---------------------
+TO DELETE NON CLUSTERED INDEX
+
+DROP INDEX COLUMNSTORE
+    ON STUDENTS
+GO
+
+
+
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+----------------------------------Memory Optimized Tables--------------------
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+SQL Server Performance Tuning
+
+
+MEMORY OPTIMIZED TABLES  (MOT) :
+A TECHNIQUE TO PRE-LOAD THE TABLE DATA INTO MEMORY BY USING "FILESTREAM" FILES.
+IN-MEMORY PROCESSING.
+
+ADVANTAGE OF MOT:	
+FASTER INDEXING			
+FASTER ACCESS TO ROW LEVEL DATA  = ROW STORE 
+FASTER CALCULATIONS, AGGREGATIONS AND DML OPERATIONS 
+
+STEPS TO IMPLEMENT MEMORY OPTIMIZED TABLES [MOT TABLES]:
+		STEP 1: ENABLE MEMORY OPTIMIZATION ON THE DATABASE
+		STEP 2: DEFINE A MEMORY OPTIMIZED ENABLED FILEGROUP
+		STEP 3: ADD FILESTREAM FILE TO ABOVE FILEGROUP
+		STEP 4: DEFINE TABLE(S) USING ABOVE FILEGROUP
+		STEP 5: UPDATE THE STATISTICS
+
+-- STEP 1: ENABLE MEMORY OPTIMIZATION PROPERTY ON THE DATABASE.
+-- AVAILABLE FOR SQL SERVER 2016 AND HIGHER VERSIONS
+USE MASTER 
+GO
+CREATE DATABASE [PRODUCT_DATABASE1]
+GO
+ALTER DATABASE  [PRODUCT_DATABASE1] SET MEMORY_OPTIMIZED_ELEVATE_TO_SNAPSHOT = ON  
+
+
+
+-- STEP 2: DEFINE A NEW FILEGROUP AND ENABLE IT FOR MOT TABLES
+ALTER DATABASE [PRODUCT_DATABASE1] ADD FILEGROUP MOT_FG  CONTAINS MEMORY_OPTIMIZED_DATA 
+
+
+
+-- STEP 3: ADD ATLEAST ONE FILE (FILESTREAM) TO ABOVE FILEGROUP
+ALTER DATABASE [PRODUCT_DATABASE1] ADD FILE (name='imoltp_mod', filename='C:\imoltpmod')  TO FILEGROUP MOT_FG  
+ 
+
+USE [PRODUCT_DATABASE1]
+
+
+ -- STEP 4: CREATE TABLE USING MEMORY OPTIMIZATION SETTINGS
+CREATE TABLE dbo.ShoppingCart
+	(   
+    ShoppingCartId INT IDENTITY(1,1) PRIMARY KEY NONCLUSTERED,    -- MANDATORY
+    UserId INT NOT NULL INDEX ix_UserId NONCLUSTERED,   
+    CreatedDate DATETIME NOT NULL,   
+    TotalPrice MONEY  
+    ) WITH (MEMORY_OPTIMIZED=ON)   
+  GO  
+  
+INSERT dbo.ShoppingCart VALUES (8798, SYSDATETIME(), NULL) ,  (23, SYSDATETIME(), 45.4)  , (80, SYSDATETIME(), NULL)   
+INSERT dbo.ShoppingCart VALUES (342, SYSDATETIME(), 65.4)   
+GO  
+
+select * from ShoppingCart		-- PREEMPTIVE CACHING : PRELOAD THE DATA INTO MEMORY FOR FASTER OPERATIONS.
+
+
+-- STEP 5: DEFINE / UPDATE STATISTICS ON ABOVE TABLE.
+UPDATE STATISTICS dbo.ShoppingCart WITH FULLSCAN	 -- All data pages for this table are scanned & updated 
+
+----------------------
+
+NOTE - FILES ADD TO Memory Optimization called FileStream File, enable Filegroup
+
+
+Note- in step 4, when you create table , make sure Primary Key is set to NONCLUSTERED
+
+Usually Primary key is Clustered, here it should be 
+ NONCLUSTERED, because in Memory optimization table, Memory will main a CLUSTERED INDEX.
+Make sure you Turn On the Memory optimization  while creating the table.
+
+when in sert data inside the table , the table data is pre loaded inside the Memory for faster operation. Is like PREEMPTIVE CACHING : PRELOAD THE DATA INTO MEMORY FOR FASTER OPERATIONS.
+
+step 5 you need to update the statistics
+
+-----------------------
+summary
+ we saw how to:
+-Enable Optimization at Database Level 
+-FILEGROUP LEVEL
+- Add Filestream File
+- Table Level
+-update statistics
+
+advantage- we are able to pre loaded inside the Memory for faster operation
+
+NOTE - With User Interface, We cannot define Memory optimize Tables. If we try it we get just script automatically
+
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+----------------------------------Temporal Tables--------------------
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+TEMPORAL TABLES: 
+	A MECHANISM TO CREATE ADDITIONAL HISTORY TRACKING TABLES.
+	BASED ON EXISTING ROW UPDATES & DELETES ON THE BASE TABLE.
+
+MEANS:
+	WHENEVER WE PERFORM ANY UPDATE / DELETE TO THE BASE TABLE
+	SUCH OPERATIONS ARE AUTO AUDITTED TO ADDITIONAL TABLE CALLED  : "TEMPORAL TABLE"
+	THIS TEMPORAL TABLE IS AUTO CREATED DURING THE BASE TABLE CREATION ITSELF. 
+
+	THIS TEMPORAL TABLE IS USED FOR :
+		1. TRACKING HISTORICAL DATA, CAN ALSO BE USED FOR ACCIDENTAL DATA RECOVERY  BY DBAs
+		2. INCREMENTAL DATA LOADS (ETL IN DWH DB DESIGN) BY BI DEVELOPERS
+
+	TEMPORAL TABLES ARE NEW FEATURE FROM SQL SERVER 2016.
+
+TEMPORAL TABLE is mainly for auditing, change  tracking activities.
+
+Example.
+we creatte table,and PIMARY KEY Should be CLUSTERED 
+
+create table Employee
+(
+Emp_ID int PRIMARY KEY CLUSTERED,			-- MANDATORY
+Emp_name varchar(15),
+Emp_desc varchar(100),
+[ValidFrom] datetime2 (DELETE DATE
+PERIOD FOR SYSTEM_TIME (ValidFrom, ValidTo)								
+)
+WITH (SYSTEM_VERSIONING = ON (HISTORY_TABLE = dbo.EmployeeHistory));	
+
+------------
+Explain
+ValidFrom] datetime2 (2) GENERATED ALWAYS AS ROW START,		
+-- TO AUDIT ROW INSERTION DATE
+
+[ValidTo] datetime2 (2)
+ GENERATED ALWAYS AS ROW END ,			
+
+-- TO AUDIT ROW UPDATE / DELETE DATE
+
+PERIOD FOR SYSTEM_TIME (ValidFrom, ValidTo)						
+-- THIS IS A COMPUTED COLUMN					
+)
+WITH (SYSTEM_VERSIONING = ON (HISTORY_TABLE = dbo.EmployeeHistory));	
+
+-- THIS HISTORY TABLE IS AUTO CREATED
+
+select * from Employee
+SELECT * FROM EmployeeHistory
+
+
+insert into Employee(Emp_ID,Emp_name,Emp_desc) values ( 1001,'Steve Ley' ,'Program Manager , 5+ Exp, Excellent Communication Skills')
+insert into Employee(Emp_ID,Emp_name,Emp_desc) values ( 1002,'Jonathan' ,'Executive Manager , 10+ Exp, Excellent Domain Skills')
+insert into Employee(Emp_ID,Emp_name,Emp_desc) values ( 1003,'Jonathan Little' ,'Executive Manager , 10+ Exp, Excellent Domain Skills')
+insert into Employee(Emp_ID,Emp_name,Emp_desc) values ( 1004, 'Little' ,'Executive Manager , 10+ Exp, Excellent Domain Skills')
+insert into Employee(Emp_ID,Emp_name,Emp_desc) values ( 1005,'Jona' ,'Executive Manager , 10+ Exp, Excellent Domain Skills')
+insert into Employee(Emp_ID,Emp_name,Emp_desc) values ( 1006,'Jonathan L' ,'Executive Manager , 10+ Exp, Excellent Domain Skills')
+insert into Employee(Emp_ID,Emp_name,Emp_desc) values ( 1007,'GEORE' ,'Executive Manager , 10+ Exp, Excellent Domain Skills')
+insert into Employee(Emp_ID,Emp_name,Emp_desc) values ( 1008,'JEFF' ,'Executive Manager , 10+ Exp, Excellent Domain Skills')
+
+
+select * from Employee							-- 8 ROWS
+SELECT * FROM EmployeeHistory					-- 0 ROWS
+
+
+NOTE - Insert should not be tracked here in EmployeeHistory			
+
+       UPDATE Employee	SET EMP_NAME = 'NAME NEW' WHERE EMP_ID = 1001
+
+
+History table contain entry whenever Base table is updated, te temporarytable is updated automatically.
+but what does it contain
+
+The history table which is EmployeeHistory	table will contain the old employee name(Sandra) while the base table  that is Employee table itself will contain new name (Sarah). the new name is in the actual table.
+
+What are we doing? We are tracking the old data , old history that is called Temporal Tables.
+
+So Base table contain actual employee data, updated content
+To trace back old data we have history table ie Temporal Tables
+
+--------
+TESTING TEMPORAL VALUES FOR UPDATES
+
+UPDATE Employee	SET EMP_NAME = 'NAME NEW' WHERE EMP_ID = 1001
+
+
+TESTING TEMPORAL VALUES FOR DELETES
+DELETE FROM Employee WHERE EMP_ID = 1001
+----
+select * from Employee					
+SELECT * FROM EmployeeHistory				
+FOR DELETE	
+SO, EMP_ID, row 1001 will be removed from base table, but it will be stored in temporary table
+
+Temporal table contain old value that has updated and deleted row
+
+Whwn is useful. testing enviroment, data recovery enivroment
+ example i would like test an object like store procedure.
+data is safe because temporal data can track old data that procedure do , update to new data.
+
+REALTIME USE - THESE TEMPORAL TABLES ARE VERY USEFUL FOR TESTING AND ETL (DWH) ENVIROMENT  ie BIG DATA
+In such a case we need trace and track back old data, there comes temporal data, An interesting and ver useful concept
+
+Using Triger we can do same activites because it has Memory table
+Triger can do same thing but temporarl table is better.
+
+TO TRACE THE DML OPERATIONS, PREFER USING TEMPORAL TABLE INSTEAD OF USING TRIGGERS.
+TRIGGERS make your DML Operation runs slow
+what is the alternative , how can i track my DML OPERATION-ANSWER USE TEMORAL TABLES.
+
+TRIGGERS Memory are accessible only within the TRIGGERS.
+while TEMPORAL TABLE ia permant table, is acceble any where forever.
+Why do we use TEMPORAL TABLE
+-to optimize database design
+- avoiding triggers, you can make use of TEMPORAL TABLE
+
+
+
+
+
+
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+----------------------------------STATISTICS OBJECT--------------------
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+/*
+STATISTICS ARE DATABASE OBJECTS USED TO STORE COLUMN ADDRESS INFORMATION.
+PURPOSE: FOR FASTER, EASIER COLUMN ACCESS. 
+
+Here previous index we store data address while statistics object store column address.
+
+
+ADVANTAGE OF STATISTICS:
+	ASSUME A TABLE WITH MULTIPLE COLUMNS.
+	YOU USE ONE COLUMN IN A QUERY CONDITION. 
+	THIS AUTO CREATES ONE STATISTICS ON THIS COLUMN.
+
+	THEN THE NEXT TIME WE USE THE SAME COLUMN IN THE QUERIES, THE ABOVE CREATED STATISTICS ARE AUTO DETECTED, USED
+	BY QO (QUERY OPTIMIZER) FOR ANALYSING THE BEST EXECUTION PLAN. 
+
+	STATISTICS ARE AUTO CREATED WHEN:
+	1. WE CREATE THE INDEX ON A COLUMN
+	2. WE USE A COLUMN IN THE QUERY CONDITIONS
+
+	ADDITIONALLY, WE CAN ALSO CREATE STATISTICS MANUALLY.
+*/
+
+-----------
+	
+CREATE DATABASE STATS_DB 
+
+USE STATS_DB
+
+CREATE TABLE TEST_TABLE (COL1 INT PRIMARY KEY, COL2 INT)
+INSERT INTO TEST_TABLE VALUES (1001, 10), (1002, 10), (1003, 10), (1004, 10)
+------------------
+SELECT * FROM TEST_TABLE WHERE COL2 = 10		-- STATISTICS ARE AUTO CREATED.
+----------
+
+We also create statistics manually
+-- HOW TO CREATE STATISTICS MANUALLY?
+CREATE STATISTICS STATS2 ON TEST_TABLE (COL2)
+
+Three statistics created in our example able, when you run it you can verfy the the thress statistics created.
+
+Statistics object store column address information. Every Condition Statistic object will be created and for every indexes Statistic object will be created
+ 
+	WHY DO WE USE STATISTICS OBJECT ?
+Also WHEN DO WE all these object  Like (PARTITION, INDEXES ETC) ?
+ We have something called DTA TOOL AND PROFILER TOOL
+
+efficency is important
+** To get efficient adivce, accurate advice, we have an auditing tool called PROFILER.
+
+DTA tool mean DATABASE ENGINE TUNING ADIVISOR
+
+NOTE- Before you use profiler you need to have run some long queries
+------------------
+	           PROFILER STEPS:
+
+-Click on Tool icon on top taskbar
+--- select server PROFILER
+ Give server Name
+--Next
+ -- Give Trace name Trace Name
+ -- Ensure accurate Trace Provider Name
+--- Use the template: Tuning
+----Save to File ( to deskstop, download etc)
+---set file size to 100 (once file reach it size a new file should be auto createdthat is called File RollOver)
+--click Enable File rollover
+-- click server processes trace data
+Server Processes trace data means The output of this profiler tool is sent as input to DTA tool. The output should be this profiler tool
+--Enable trace stop time: is optional
+-----------------
+  
+Using Profiler may have impact on performance, we need to minimize the use of profiler, so for that we have EVENT SELECTION
+
+NOTE- Before you use profiler or event selection you need to have run some long queries
+----------
+
+	       EVENT SELECTION STEPS:
+
+ From that Profiler window that is still open
+ -- Go to the top and click on Events Selection
+--- Show all event : is optional
+--- Show all columns: is optional
+ --- Click on Column filter, from there click on DatabaseName, go to your ssms then choose any database you want to work it and copy the name then paste it on database name, on LIKE option,once you choose the database name then click ok
+--- Click on Run
+--- so what we are learning ?
+  How to define a trace
+ Remember template is Tuning template once it start  to run, it takes some time to run.
+ Once run is successful, The Trace start, we fine tune the query as per the our requirement.
+select, run some long runing queries on this database PRODUCT DATABASE
+
+ Run some sql queries step by step  after that  those queries will be automatically audited by profiler
+
+once the trace has been displayed , stop the run and close it.
+
+------------------
+once you have stop the profiler, the file is ready.
+
+
+GO TO DTA
+	      DATABASE ENGINE TUNING ADIVISOR STEPS:
+
+-- Go TO Tool, choose DTA and connect
+-- click on file then click on Browse button at the right side
+-- choose any file you have created
+-- select the Database for workload anaylsis: PRODUCT DATABASE
+-- Select Database and Table to tune: click and choose the DB you want to work with.
+-- go to to the top icons, click Tuning option. 
+--- Select  Indexes or any type of Indexed you want.
+-- Select Partition, choose Aligned partition, NOTE: By default is no partition. 
+Aligned partition means index with partition.
+--- Physical Design Structures (PDS) to keep in database: Keep all existing PDS.
+--click on Start Analysis
+--- recommendation will appear
+-- after that we need to get this indexes recommended, click the link at the definition, Copy to clipboard , it will give you a SCRIPT of the recommended index
+---verify the script, notice ONLINE INDES IS OFF
+-- copy all indexes recommended to clipboard
+-- Select them one by one and run
+--------------------
+
+
+Tune Advisor - gives us advise whether to use Indexes or to create statistics or to create partition. that is the concept.
+
+what is the purpose of this Advisor ? To give use advice about indexes and partition. it is partition with clustered index. is regular partition.
+
+Parent Partition is full partition
+DROP EXISTING means if statistics or index already exist Drop it
+TOOL gives us recommendation what which tuning tool to use.
+
+--------------------
+
+-- TO MONITOR STATISTICS OF A TABLE:
+SELECT * FROM SYS.STATS WHERE OBJECT_ID = OBJECT_ID('TEST_TABLE')	
+
+
+
+-- HOW TO UPDATE THE STATISTICS MANUALLY?
+UPDATE STATISTICS TEST_TABLE WITH FULLSCAN			-- EVERY PAGE FOR THIS TABLE IS SCANNED, UPDATED
+
+
+-- INDEXES:		USED TO BOOKMARK THE COLUMN DATA
+-- STATISTICS:	USED TO BOOKMARK THE COLUMN ADDRESS
+
+
+/*
+MAINTENENCE OF STATISTICS: 	
+FOR EFFICIENT USE OF STATISTICS BY QUERY OPTIMIZER, WE NEED TO ENSURE THE STATS ARE UPTO DATE.
+	OPTION 1:	MANUAL / ON-DEMAND UPDATE OF STATISTICS FOR A SPECIFIC TABLE
+	OPTION 2:	AUTOMATED STATISTICS UPDATE OF ALL TABLES IN ALL DATABASES IN THE SERVER : MAINTENANCE PLANS
+
+*/ 
+
+
